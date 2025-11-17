@@ -13,7 +13,6 @@ st.set_page_config(
 @st.cache_data
 def cargar_datos():
     try:
-        # Leemos con punto y coma y decimal con coma (formato argentino)
         df = pd.read_csv('resultado_analisis.csv', sep=';', decimal=',')
         return df
     except FileNotFoundError:
@@ -25,7 +24,7 @@ if df is None:
     st.error("❌ Falta el archivo 'resultado_analisis.csv'.")
     st.stop()
 
-# --- BARRA LATERAL (FILTROS) ---
+# --- SIDEBAR (FILTROS) ---
 st.sidebar.header("🔍 Filtros")
 busqueda = st.sidebar.text_input("Buscar producto:", placeholder="Ej: Queso")
 rango_margen = st.sidebar.slider(
@@ -44,32 +43,59 @@ if busqueda:
 
 # --- PÁGINA PRINCIPAL ---
 st.title("📊 Estado del Negocio")
-st.markdown("Vista rápida de rentabilidad y precios.")
+st.markdown("Segmentación de productos según su rentabilidad.")
 
-# --- KPIs INTELIGENTES (Simples de leer) ---
-# Calculamos los números
-total_prod = len(df_filtrado)
-margen_mediana = df_filtrado['Margen_%'].median()
-criticos = len(df_filtrado[df_filtrado['Margen_%'] < 15])
-roi = (df_filtrado['Ganancia_$'].sum() / df_filtrado['Costo'].sum()) * 100 if df_filtrado['Costo'].sum() > 0 else 0
+# --- LÓGICA DE SEGMENTACIÓN (Aquí defines tus umbrales) ---
+umbral_bajo = 15
+umbral_alto = 40
 
-# Los mostramos en una fila limpia
-k1, k2, k3, k4 = st.columns(4)
+# Creamos los 3 grupos
+prods_bajos = df_filtrado[df_filtrado['Margen_%'] < umbral_bajo]
+prods_medios = df_filtrado[(df_filtrado['Margen_%'] >= umbral_bajo) & (df_filtrado['Margen_%'] <= umbral_alto)]
+prods_altos = df_filtrado[df_filtrado['Margen_%'] > umbral_alto]
 
-k1.metric("Total Productos", total_prod)
-k2.metric("Margen Típico", f"{margen_mediana:.1f}%", help="La mayoría de tus productos ronda este margen.")
-k3.metric("⚠️ Revisar Precio", criticos, delta_color="inverse", help="Productos con margen menor al 15%.")
-k4.metric("Retorno Inversión", f"{roi:.1f}%")
+# --- NUEVOS KPIs DE CATEGORÍAS ---
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric(
+    "Total Productos", 
+    len(df_filtrado),
+    help="Cantidad total de productos visibles"
+)
+
+col2.metric(
+    "💎 Margen Alto", 
+    len(prods_altos),
+    delta=f">{umbral_alto}%",
+    help=f"Productos con ganancia superior al {umbral_alto}%"
+)
+
+col3.metric(
+    "⚖️ Margen Medio", 
+    len(prods_medios),
+    delta=f"{umbral_bajo}-{umbral_alto}%",
+    delta_color="off", # Color gris neutro
+    help="Productos estándar del negocio"
+)
+
+col4.metric(
+    "⚠️ Margen Bajo", 
+    len(prods_bajos),
+    delta=f"<{umbral_bajo}%",
+    delta_color="inverse", # Rojo si aumenta
+    help=f"Productos con ganancia inferior al {umbral_bajo}%"
+)
 
 st.markdown("---")
 
-# --- GRÁFICOS (Lo esencial) ---
+# --- GRÁFICOS ---
 col_izq, col_der = st.columns(2)
 
 with col_izq:
-    st.subheader("🏆 Top 10 Mejores Márgenes")
-    # Gráfico de barras simple y efectivo
+    st.subheader("🏆 Top 10 Mejores Productos")
+    # Tomamos los mejores del segmento Alto (o del total si hay pocos)
     top_10 = df_filtrado.nlargest(10, 'Margen_%')
+    
     fig_bar = px.bar(
         top_10, 
         x='Margen_%', 
@@ -83,17 +109,25 @@ with col_izq:
     st.plotly_chart(fig_bar, use_container_width=True)
 
 with col_der:
-    st.subheader("💰 Costo vs. Precio")
-    # Gráfico de dispersión para detectar anomalías visualmente
+    st.subheader("💰 Mapa de Rentabilidad")
+    # Coloreamos el scatter plot según estas nuevas categorías
+    # Creamos una columna temporal para el color del gráfico
+    def categorizar(m):
+        if m > umbral_alto: return "Alto"
+        elif m < umbral_bajo: return "Bajo"
+        else: return "Medio"
+    
+    df_filtrado['Categoría'] = df_filtrado['Margen_%'].apply(categorizar)
+    
     fig_scatter = px.scatter(
         df_filtrado,
         x='Costo',
         y='Precio',
         size='Margen_%',
-        color='Margen_%',
+        color='Categoría', # Usamos la nueva categoría para los colores
+        color_discrete_map={"Alto": "green", "Medio": "gold", "Bajo": "red"}, # Colores semáforo
         hover_name='Desc',
-        title="Relación de Precios (Color = Margen)",
-        color_continuous_scale='Viridis'
+        title="Distribución de Costos y Precios"
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
 
@@ -101,7 +135,6 @@ with col_der:
 st.markdown("---")
 st.subheader("📋 Listado Detallado")
 
-# Tabla simple con gradiente de color para identificar rápido lo bueno y lo malo
 st.dataframe(
     df_filtrado.style.format({
         "Precio": "${:,.0f}",
