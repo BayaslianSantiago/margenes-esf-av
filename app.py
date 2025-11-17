@@ -2,139 +2,112 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="Dashboard Rentabilidad Pro", page_icon="🧀", layout="wide")
+# --- CONFIGURACIÓN VISUAL ---
+st.set_page_config(
+    page_title="Dashboard Fiambrería",
+    page_icon="🧀",
+    layout="wide"
+)
 
-# --- CARGA (Igual que antes) ---
+# --- CARGA DE DATOS ---
 @st.cache_data
 def cargar_datos():
     try:
+        # Leemos con punto y coma y decimal con coma (formato argentino)
         df = pd.read_csv('resultado_analisis.csv', sep=';', decimal=',')
         return df
     except FileNotFoundError:
         return None
 
 df = cargar_datos()
+
 if df is None:
+    st.error("❌ Falta el archivo 'resultado_analisis.csv'.")
     st.stop()
 
-# --- SIDEBAR MEJORADO ---
-st.sidebar.header("🔍 Configuración")
+# --- BARRA LATERAL (FILTROS) ---
+st.sidebar.header("🔍 Filtros")
+busqueda = st.sidebar.text_input("Buscar producto:", placeholder="Ej: Queso")
+rango_margen = st.sidebar.slider(
+    "Filtrar por Margen %", 
+    0.0, float(df['Margen_%'].max()), (0.0, float(df['Margen_%'].max()))
+)
 
-# Filtros
-busqueda = st.sidebar.text_input("Buscar producto:", placeholder="Ej: Salamin")
-rango_margen = st.sidebar.slider("Filtro Margen %:", 0.0, float(df['Margen_%'].max()), (0.0, float(df['Margen_%'].max())))
-
-# --- NUEVO: SIMULADOR ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔮 Simulador de Impacto")
-st.sidebar.write("Si aumentaras el precio de estos productos...")
-aumento_simulado = st.sidebar.slider("Aumento de Precio (%)", 0, 50, 0)
-
-# Aplicar Filtros
+# Aplicar filtros
 df_filtrado = df[
     (df['Margen_%'] >= rango_margen[0]) & 
     (df['Margen_%'] <= rango_margen[1])
 ]
+
 if busqueda:
     df_filtrado = df_filtrado[df_filtrado['Desc'].str.contains(busqueda, case=False, na=False)]
 
-# --- LÓGICA DEL SIMULADOR ---
-# Calculamos cuánta plata extra entraría si aplicamos ese % de aumento
-dinero_extra = (df_filtrado['Precio'] * (aumento_simulado/100)).sum()
-
 # --- PÁGINA PRINCIPAL ---
-st.title("📊 Monitor de Rentabilidad e Inteligencia")
+st.title("📊 Estado del Negocio")
+st.markdown("Vista rápida de rentabilidad y precios.")
 
-# KPIs
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-kpi1.metric("Productos", len(df_filtrado))
-kpi2.metric("Margen Mediana", f"{df_filtrado['Margen_%'].median():.2f}%")
-kpi3.metric("Prod. Críticos (<15%)", len(df_filtrado[df_filtrado['Margen_%'] < 15]))
+# --- KPIs INTELIGENTES (Simples de leer) ---
+# Calculamos los números
+total_prod = len(df_filtrado)
+margen_mediana = df_filtrado['Margen_%'].median()
+criticos = len(df_filtrado[df_filtrado['Margen_%'] < 15])
+roi = (df_filtrado['Ganancia_$'].sum() / df_filtrado['Costo'].sum()) * 100 if df_filtrado['Costo'].sum() > 0 else 0
 
-# El KPI 4 cambia dinámicamente con el simulador
-kpi4.metric(
-    label=f"Ganancia Extra (Si +{aumento_simulado}%)",
-    value=f"${dinero_extra:,.0f}",
-    delta="Proyección Mensual" if aumento_simulado > 0 else None,
-    help="Dinero adicional facturado si vendieras 1 unidad de cada producto con el aumento simulado."
-)
+# Los mostramos en una fila limpia
+k1, k2, k3, k4 = st.columns(4)
+
+k1.metric("Total Productos", total_prod)
+k2.metric("Margen Típico", f"{margen_mediana:.1f}%", help="La mayoría de tus productos ronda este margen.")
+k3.metric("⚠️ Revisar Precio", criticos, delta_color="inverse", help="Productos con margen menor al 15%.")
+k4.metric("Retorno Inversión", f"{roi:.1f}%")
 
 st.markdown("---")
 
-# --- PESTAÑAS PARA ORGANIZAR ---
-tab1, tab2, tab3 = st.tabs(["📈 Análisis Visual", "📦 Segmentación de Precios", "📋 Datos & Descargas"])
+# --- GRÁFICOS (Lo esencial) ---
+col_izq, col_der = st.columns(2)
 
-with tab1:
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Distribución de Márgenes")
-        # HISTOGRAMA: Muestra dónde se concentran tus productos
-        fig_hist = px.histogram(
-            df_filtrado, 
-            x="Margen_%", 
-            nbins=20, 
-            title="¿Cómo se distribuyen mis ganancias?",
-            color_discrete_sequence=['#2E8B57'] # Verde bosque
-        )
-        # Agregamos una línea vertical en la mediana
-        fig_hist.add_vline(x=df_filtrado['Margen_%'].median(), line_dash="dash", line_color="red", annotation_text="Mediana")
-        st.plotly_chart(fig_hist, use_container_width=True)
-        st.caption("Si la curva está muy a la izquierda, tienes muchos productos poco rentables.")
+with col_izq:
+    st.subheader("🏆 Top 10 Mejores Márgenes")
+    # Gráfico de barras simple y efectivo
+    top_10 = df_filtrado.nlargest(10, 'Margen_%')
+    fig_bar = px.bar(
+        top_10, 
+        x='Margen_%', 
+        y='Desc', 
+        orientation='h', 
+        text='Margen_%',
+        color='Margen_%',
+        color_continuous_scale='Greens'
+    )
+    fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-    with col2:
-        st.subheader("Top 10 Rentabilidad")
-        top_10 = df_filtrado.nlargest(10, 'Margen_%')
-        fig_bar = px.bar(top_10, x='Margen_%', y='Desc', orientation='h', color='Margen_%', color_continuous_scale='Greens')
-        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-        st.plotly_chart(fig_bar, use_container_width=True)
+with col_der:
+    st.subheader("💰 Costo vs. Precio")
+    # Gráfico de dispersión para detectar anomalías visualmente
+    fig_scatter = px.scatter(
+        df_filtrado,
+        x='Costo',
+        y='Precio',
+        size='Margen_%',
+        color='Margen_%',
+        hover_name='Desc',
+        title="Relación de Precios (Color = Margen)",
+        color_continuous_scale='Viridis'
+    )
+    st.plotly_chart(fig_scatter, use_container_width=True)
 
-with tab2:
-    st.subheader("Rentabilidad según Precio del Producto")
-    st.markdown("Analiza si ganas más con productos baratos o caros.")
-    
-    # Creamos categorías de precio al vuelo para este gráfico
-    # Usamos 'qcut' de pandas para dividir en 3 grupos iguales (Terciles)
-    try:
-        df_filtrado['Categoría Precio'] = pd.qcut(df_filtrado['Precio'], q=3, labels=["Económico", "Medio", "Premium"])
-        
-        fig_box = px.box(
-            df_filtrado, 
-            x="Categoría Precio", 
-            y="Margen_%", 
-            color="Categoría Precio",
-            points="all", # Muestra los puntos individuales también
-            title="Dispersión de Márgenes por Tipo de Producto"
-        )
-        st.plotly_chart(fig_box, use_container_width=True)
-        st.info("💡 **Tip de Negocio:** Si la caja 'Premium' está muy abajo, estás perdiendo oportunidad en los productos caros.")
-    except ValueError:
-        st.warning("No hay suficientes datos filtrados para crear categorías de precio.")
+# --- TABLA FINAL ---
+st.markdown("---")
+st.subheader("📋 Listado Detallado")
 
-with tab3:
-    col_tabla, col_descarga = st.columns([3, 1])
-    
-    with col_tabla:
-        st.dataframe(df_filtrado.style.format({"Precio": "${:,.2f}", "Costo": "${:,.2f}", "Margen_%": "{:.2f}%"}).background_gradient(subset=['Margen_%'], cmap='Greens'), use_container_width=True)
-    
-    with col_descarga:
-        st.subheader("Acciones")
-        # Botón especial para descargar SOLO los críticos
-        criticos = df_filtrado[df_filtrado['Margen_%'] < 15]
-        st.write(f"Hay **{len(criticos)}** productos urgentes.")
-        
-        st.download_button(
-            label="🚨 Descargar Lista Crítica",
-            data=criticos.to_csv(index=False, sep=';', decimal=',').encode('utf-8'),
-            file_name='productos_revisar_precio.csv',
-            mime='text/csv',
-            type='primary' # Lo hace rojo/destacado
-        )
-        
-        st.write("---")
-        st.download_button(
-            label="📥 Descargar Todo Filtrado",
-            data=df_filtrado.to_csv(index=False, sep=';', decimal=',').encode('utf-8'),
-            file_name='analisis_completo.csv',
-            mime='text/csv'
-        )
+# Tabla simple con gradiente de color para identificar rápido lo bueno y lo malo
+st.dataframe(
+    df_filtrado.style.format({
+        "Precio": "${:,.0f}",
+        "Costo": "${:,.0f}",
+        "Ganancia_$": "${:,.0f}",
+        "Margen_%": "{:.1f}%"
+    }).background_gradient(subset=['Margen_%'], cmap='RdYlGn', vmin=0, vmax=50),
+    use_container_width=True
+)
