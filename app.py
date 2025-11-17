@@ -2,138 +2,139 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(
-    page_title="Dashboard Rentabilidad",
-    page_icon="📈",
-    layout="wide"
-)
+st.set_page_config(page_title="Dashboard Rentabilidad Pro", page_icon="🧀", layout="wide")
 
-# --- FUNCIÓN DE CARGA DE DATOS ---
+# --- CARGA (Igual que antes) ---
 @st.cache_data
 def cargar_datos():
-    # Al estar en el mismo repo, solo ponemos el nombre del archivo.
-    # Mantenemos el formato que generamos: punto y coma y coma decimal.
     try:
         df = pd.read_csv('resultado_analisis.csv', sep=';', decimal=',')
         return df
     except FileNotFoundError:
         return None
 
-# Cargamos los datos
 df = cargar_datos()
-
-# --- CONTROL DE ERRORES ---
 if df is None:
-    st.error("""
-    ❌ **No se encuentra el archivo 'resultado_analisis.csv'.**
-    
-    Asegúrate de que:
-    1. El archivo 'resultado_analisis.csv' esté subido al repositorio.
-    2. Esté en la misma carpeta que este archivo 'app.py'.
-    3. El nombre esté escrito exactamente igual.
-    """)
     st.stop()
 
-# --- SIDEBAR (BARRA LATERAL DE FILTROS) ---
-st.sidebar.header("🔍 Filtros de Análisis")
+# --- SIDEBAR MEJORADO ---
+st.sidebar.header("🔍 Configuración")
 
-st.sidebar.write("Usa estos filtros para encontrar oportunidades.")
+# Filtros
+busqueda = st.sidebar.text_input("Buscar producto:", placeholder="Ej: Salamin")
+rango_margen = st.sidebar.slider("Filtro Margen %:", 0.0, float(df['Margen_%'].max()), (0.0, float(df['Margen_%'].max())))
 
-# 1. Filtro de Búsqueda de Texto
-busqueda = st.sidebar.text_input("Buscar producto por nombre:", placeholder="Ej: Salamin")
+# --- NUEVO: SIMULADOR ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔮 Simulador de Impacto")
+st.sidebar.write("Si aumentaras el precio de estos productos...")
+aumento_simulado = st.sidebar.slider("Aumento de Precio (%)", 0, 50, 0)
 
-# 2. Filtro por Margen
-min_val = float(df['Margen_%'].min())
-max_val = float(df['Margen_%'].max())
-
-rango_margen = st.sidebar.slider(
-    "Filtrar por % de Margen:",
-    min_value=min_val,
-    max_value=max_val,
-    value=(min_val, max_val)
-)
-
-# --- APLICACIÓN DE FILTROS ---
+# Aplicar Filtros
 df_filtrado = df[
     (df['Margen_%'] >= rango_margen[0]) & 
     (df['Margen_%'] <= rango_margen[1])
 ]
-
 if busqueda:
     df_filtrado = df_filtrado[df_filtrado['Desc'].str.contains(busqueda, case=False, na=False)]
 
+# --- LÓGICA DEL SIMULADOR ---
+# Calculamos cuánta plata extra entraría si aplicamos ese % de aumento
+dinero_extra = (df_filtrado['Precio'] * (aumento_simulado/100)).sum()
+
 # --- PÁGINA PRINCIPAL ---
-st.title("📊 Monitor de Rentabilidad")
-st.markdown("Análisis interactivo de costos, precios y márgenes de ganancia.")
+st.title("📊 Monitor de Rentabilidad e Inteligencia")
 
-# --- KPIs (MÉTRICAS CLAVE) ---
-# Usamos columnas para mostrar los números grandes
+# KPIs
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1.metric("Productos", len(df_filtrado))
+kpi2.metric("Margen Mediana", f"{df_filtrado['Margen_%'].median():.2f}%")
+kpi3.metric("Prod. Críticos (<15%)", len(df_filtrado[df_filtrado['Margen_%'] < 15]))
 
-kpi1.metric("Productos Analizados", len(df_filtrado))
-kpi2.metric("Margen Promedio", f"{df_filtrado['Margen_%'].mean():.2f}%")
-kpi3.metric("Precio Venta Promedio", f"${df_filtrado['Precio'].mean():,.0f}")
-kpi4.metric("Ganancia Promedio x Unidad", f"${df_filtrado['Ganancia_$'].mean():,.0f}")
+# El KPI 4 cambia dinámicamente con el simulador
+kpi4.metric(
+    label=f"Ganancia Extra (Si +{aumento_simulado}%)",
+    value=f"${dinero_extra:,.0f}",
+    delta="Proyección Mensual" if aumento_simulado > 0 else None,
+    help="Dinero adicional facturado si vendieras 1 unidad de cada producto con el aumento simulado."
+)
 
 st.markdown("---")
 
-# --- GRÁFICOS ---
-col_graf1, col_graf2 = st.columns(2)
+# --- PESTAÑAS PARA ORGANIZAR ---
+tab1, tab2, tab3 = st.tabs(["📈 Análisis Visual", "📦 Segmentación de Precios", "📋 Datos & Descargas"])
 
-with col_graf1:
-    st.subheader("🏆 Top 10: Mayor Rentabilidad")
-    # Ordenamos y tomamos los 10 mejores
-    top_10_margen = df_filtrado.nlargest(10, 'Margen_%')
+with tab1:
+    col1, col2 = st.columns(2)
     
-    fig_bar = px.bar(
-        top_10_margen, 
-        x='Margen_%', 
-        y='Desc',
-        orientation='h',
-        text='Margen_%',
-        title="Productos con mayor porcentaje de ganancia",
-        color='Margen_%',
-        color_continuous_scale='Greens'
-    )
-    fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-    st.plotly_chart(fig_bar, use_container_width=True)
+    with col1:
+        st.subheader("Distribución de Márgenes")
+        # HISTOGRAMA: Muestra dónde se concentran tus productos
+        fig_hist = px.histogram(
+            df_filtrado, 
+            x="Margen_%", 
+            nbins=20, 
+            title="¿Cómo se distribuyen mis ganancias?",
+            color_discrete_sequence=['#2E8B57'] # Verde bosque
+        )
+        # Agregamos una línea vertical en la mediana
+        fig_hist.add_vline(x=df_filtrado['Margen_%'].median(), line_dash="dash", line_color="red", annotation_text="Mediana")
+        st.plotly_chart(fig_hist, use_container_width=True)
+        st.caption("Si la curva está muy a la izquierda, tienes muchos productos poco rentables.")
 
-with col_graf2:
-    st.subheader("📉 Estrategia de Precios (Costo vs Precio)")
-    # Scatter plot: permite ver outliers
-    fig_scatter = px.scatter(
-        df_filtrado,
-        x='Costo',
-        y='Precio',
-        size='Margen_%', # El tamaño de la burbuja es el margen
-        color='Ganancia_$', # El color es la ganancia en plata
-        hover_name='Desc',
-        title="Relación Costo-Precio (Burbuja = % Margen)",
-        color_continuous_scale='Bluered'
-    )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    with col2:
+        st.subheader("Top 10 Rentabilidad")
+        top_10 = df_filtrado.nlargest(10, 'Margen_%')
+        fig_bar = px.bar(top_10, x='Margen_%', y='Desc', orientation='h', color='Margen_%', color_continuous_scale='Greens')
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-# --- TABLA DE DATOS ---
-st.markdown("---")
-st.subheader("📋 Detalle de Productos")
+with tab2:
+    st.subheader("Rentabilidad según Precio del Producto")
+    st.markdown("Analiza si ganas más con productos baratos o caros.")
+    
+    # Creamos categorías de precio al vuelo para este gráfico
+    # Usamos 'qcut' de pandas para dividir en 3 grupos iguales (Terciles)
+    try:
+        df_filtrado['Categoría Precio'] = pd.qcut(df_filtrado['Precio'], q=3, labels=["Económico", "Medio", "Premium"])
+        
+        fig_box = px.box(
+            df_filtrado, 
+            x="Categoría Precio", 
+            y="Margen_%", 
+            color="Categoría Precio",
+            points="all", # Muestra los puntos individuales también
+            title="Dispersión de Márgenes por Tipo de Producto"
+        )
+        st.plotly_chart(fig_box, use_container_width=True)
+        st.info("💡 **Tip de Negocio:** Si la caja 'Premium' está muy abajo, estás perdiendo oportunidad en los productos caros.")
+    except ValueError:
+        st.warning("No hay suficientes datos filtrados para crear categorías de precio.")
 
-# Mostramos la tabla con formato condicional (verde oscuro = más margen)
-st.dataframe(
-    df_filtrado.style.format({
-        "Precio": "${:,.2f}",
-        "Costo": "${:,.2f}",
-        "Ganancia_$": "${:,.2f}",
-        "Margen_%": "{:.2f}%"
-    }).background_gradient(subset=['Margen_%'], cmap='Greens'),
-    use_container_width=True
-)
-
-# Botón para descargar lo que estás viendo
-csv_export = df_filtrado.to_csv(index=False, sep=';', decimal=',')
-st.download_button(
-    label="📥 Descargar estos datos filtrados",
-    data=csv_export,
-    file_name='analisis_exportado.csv',
-    mime='text/csv',
-)
+with tab3:
+    col_tabla, col_descarga = st.columns([3, 1])
+    
+    with col_tabla:
+        st.dataframe(df_filtrado.style.format({"Precio": "${:,.2f}", "Costo": "${:,.2f}", "Margen_%": "{:.2f}%"}).background_gradient(subset=['Margen_%'], cmap='Greens'), use_container_width=True)
+    
+    with col_descarga:
+        st.subheader("Acciones")
+        # Botón especial para descargar SOLO los críticos
+        criticos = df_filtrado[df_filtrado['Margen_%'] < 15]
+        st.write(f"Hay **{len(criticos)}** productos urgentes.")
+        
+        st.download_button(
+            label="🚨 Descargar Lista Crítica",
+            data=criticos.to_csv(index=False, sep=';', decimal=',').encode('utf-8'),
+            file_name='productos_revisar_precio.csv',
+            mime='text/csv',
+            type='primary' # Lo hace rojo/destacado
+        )
+        
+        st.write("---")
+        st.download_button(
+            label="📥 Descargar Todo Filtrado",
+            data=df_filtrado.to_csv(index=False, sep=';', decimal=',').encode('utf-8'),
+            file_name='analisis_completo.csv',
+            mime='text/csv'
+        )
