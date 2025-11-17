@@ -5,7 +5,7 @@ import plotly.express as px
 # --- CONFIGURACIÓN VISUAL ---
 st.set_page_config(
     page_title="Dashboard Fiambrería",
-    page_icon="🧀",
+    page_icon="📊",
     layout="wide"
 )
 
