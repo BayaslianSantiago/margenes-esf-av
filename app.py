@@ -2,127 +2,154 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="Dashboard Fiambrería", page_icon="🧀", layout="wide")
+# --- CONFIGURACIÓN VISUAL ---
+st.set_page_config(
+    page_title="Dashboard Fiambrería",
+    page_icon="🧀",
+    layout="wide"
+)
 
-# --- CARGA ---
+# --- CARGA DE DATOS ---
 @st.cache_data
 def cargar_datos():
     try:
+        # Lectura con formato argentino (punto y coma / coma decimal)
         df = pd.read_csv('resultado_analisis.csv', sep=';', decimal=',')
         return df
     except FileNotFoundError:
         return None
 
 df = cargar_datos()
-if df is None: st.stop()
 
-# --- FEATURE ENGINEERING: CREAR COLUMNA 'RUBRO' ---
-# Tomamos la descripción, la separamos por espacios y nos quedamos con la primera palabra
-df['Rubro'] = df['Desc'].astype(str).str.split().str[0]
+if df is None:
+    st.error("❌ No se encuentra el archivo 'resultado_analisis.csv' en el repositorio.")
+    st.stop()
 
-# Opcional: Limpieza rápida si hay rubros con 1 o 2 letras (ej: "DE", "EL") que sean basura
-df = df[df['Rubro'].str.len() > 2]
-
-# --- SIDEBAR ---
+# --- SIDEBAR (FILTROS) ---
 st.sidebar.header("🔍 Filtros")
-# Agregamos filtro por Rubro
-lista_rubros = ['Todos'] + sorted(df['Rubro'].unique().tolist())
-rubro_seleccionado = st.sidebar.selectbox("Filtrar por Rubro:", lista_rubros)
 
-rango_margen = st.sidebar.slider("Filtro Margen %", 0.0, float(df['Margen_%'].max()), (0.0, float(df['Margen_%'].max())))
+# 1. Buscador
+busqueda = st.sidebar.text_input("Buscar producto:", placeholder="Ej: Queso")
 
-# Aplicar Filtros
-df_filtrado = df[(df['Margen_%'] >= rango_margen[0]) & (df['Margen_%'] <= rango_margen[1])]
+# 2. Slider de Margen
+margen_min = float(df['Margen_%'].min())
+margen_max = float(df['Margen_%'].max())
 
-if rubro_seleccionado != 'Todos':
-    df_filtrado = df_filtrado[df_filtrado['Rubro'] == rubro_seleccionado]
+rango_margen = st.sidebar.slider(
+    "Filtrar por Margen %", 
+    0.0, margen_max, (0.0, margen_max)
+)
 
-# --- SEGMENTACIÓN ---
-umbral_bajo = 15
-umbral_alto = 40
-prods_bajos = df_filtrado[df_filtrado['Margen_%'] < umbral_bajo]
-prods_medios = df_filtrado[(df_filtrado['Margen_%'] >= umbral_bajo) & (df_filtrado['Margen_%'] <= umbral_alto)]
-prods_altos = df_filtrado[df_filtrado['Margen_%'] > umbral_alto]
+# --- APLICAR FILTROS ---
+df_filtrado = df[
+    (df['Margen_%'] >= rango_margen[0]) & 
+    (df['Margen_%'] <= rango_margen[1])
+]
 
-# --- TÍTULO Y KPIs ---
-st.title("📊 Análisis por Categorías")
+if busqueda:
+    df_filtrado = df_filtrado[df_filtrado['Desc'].str.contains(busqueda, case=False, na=False)]
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Productos", len(df_filtrado))
-col2.metric("💎 Margen Alto", len(prods_altos), delta=f">{umbral_alto}%")
-col3.metric("⚖️ Margen Medio", len(prods_medios), delta_color="off")
-col4.metric("⚠️ Margen Bajo", len(prods_bajos), delta=f"<{umbral_bajo}%", delta_color="inverse")
+# --- LÓGICA DE SEGMENTACIÓN (El semáforo) ---
+UMBRAL_BAJO = 15
+UMBRAL_ALTO = 40
+
+prods_bajos = df_filtrado[df_filtrado['Margen_%'] < UMBRAL_BAJO]
+prods_medios = df_filtrado[(df_filtrado['Margen_%'] >= UMBRAL_BAJO) & (df_filtrado['Margen_%'] <= UMBRAL_ALTO)]
+prods_altos = df_filtrado[df_filtrado['Margen_%'] > UMBRAL_ALTO]
+
+# --- PÁGINA PRINCIPAL ---
+st.title("📊 Estado de Rentabilidad")
+st.markdown("Monitoreo de márgenes y segmentación de productos.")
+
+# --- KPIs ---
+k1, k2, k3, k4 = st.columns(4)
+
+k1.metric(
+    "Total Productos", 
+    len(df_filtrado),
+    help="Productos visibles con los filtros actuales"
+)
+
+k2.metric(
+    "💎 Margen Alto", 
+    len(prods_altos),
+    delta=f">{UMBRAL_ALTO}%",
+    help="Productos muy rentables"
+)
+
+k3.metric(
+    "⚖️ Margen Medio", 
+    len(prods_medios),
+    delta=f"{UMBRAL_BAJO}-{UMBRAL_ALTO}%",
+    delta_color="off",
+    help="Productos estándar"
+)
+
+k4.metric(
+    "⚠️ Margen Bajo", 
+    len(prods_bajos),
+    delta=f"<{UMBRAL_BAJO}%",
+    delta_color="inverse", # Rojo si aumenta
+    help="Productos con poca ganancia (Revisar precios)"
+)
 
 st.markdown("---")
 
-# --- ANÁLISIS POR RUBRO (LO NUEVO) ---
-st.subheader("🏷️ Rentabilidad por Familia de Productos")
-
-# Agrupamos datos para ver el promedio por Rubro
-# (Solo mostramos rubros con más de 2 productos para evitar ruido)
-rubro_stats = df_filtrado.groupby('Rubro').agg({
-    'Margen_%': 'median',
-    'Desc': 'count',
-    'Ganancia_$': 'mean'
-}).reset_index()
-
-rubro_stats = rubro_stats[rubro_stats['Desc'] > 2].sort_values(by='Margen_%', ascending=False)
-
-# Gráfico 1: ¿Qué Rubro deja más margen?
-fig_rubro = px.bar(
-    rubro_stats.head(15), # Top 15 rubros
-    x='Rubro',
-    y='Margen_%',
-    color='Margen_%',
-    title="Top Rubros más Rentables (Mediana de Margen)",
-    text='Margen_%',
-    color_continuous_scale='Teal'
-)
-fig_rubro.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-st.plotly_chart(fig_rubro, use_container_width=True)
-
-# --- GRÁFICO DETALLADO ---
+# --- GRÁFICOS ---
 col_izq, col_der = st.columns(2)
 
 with col_izq:
-    st.subheader("📦 Dispersión por Rubro")
-    # Boxplot: Muestra si un rubro tiene precios muy variables
-    # Filtramos para mostrar solo los top 10 rubros más comunes para que se lea bien
-    top_rubros_nombres = df_filtrado['Rubro'].value_counts().head(10).index
-    df_top_rubros = df_filtrado[df_filtrado['Rubro'].isin(top_rubros_nombres)]
+    st.subheader("🏆 Top 10 Mejores Márgenes")
+    # Gráfico de barras simple
+    top_10 = df_filtrado.nlargest(10, 'Margen_%')
     
-    fig_box = px.box(
-        df_top_rubros, 
-        x='Rubro', 
-        y='Margen_%', 
-        color='Rubro',
-        title="Variabilidad de Margen en los Rubros Principales"
+    fig_bar = px.bar(
+        top_10, 
+        x='Margen_%', 
+        y='Desc', 
+        orientation='h', 
+        text='Margen_%',
+        color='Margen_%',
+        color_continuous_scale='Greens'
     )
-    st.plotly_chart(fig_box, use_container_width=True)
+    fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
+    st.plotly_chart(fig_bar, use_container_width=True)
 
 with col_der:
-    st.subheader("💰 Mapa de Rentabilidad")
+    st.subheader("💰 Mapa de Rentabilidad (Costo vs Precio)")
+    
+    # Creamos columna temporal para colorear el gráfico
     def categorizar(m):
-        if m > umbral_alto: return "Alto"
-        elif m < umbral_bajo: return "Bajo"
+        if m > UMBRAL_ALTO: return "Alto (>40%)"
+        elif m < UMBRAL_BAJO: return "Bajo (<15%)"
         else: return "Medio"
+    
     df_filtrado['Categoría'] = df_filtrado['Margen_%'].apply(categorizar)
     
+    # Gráfico de dispersión con colores fijos (Semáforo)
     fig_scatter = px.scatter(
         df_filtrado,
         x='Costo',
         y='Precio',
+        size='Margen_%', # Tamaño de burbuja = Margen
         color='Categoría',
-        color_discrete_map={"Alto": "green", "Medio": "gold", "Bajo": "red"},
+        # Asignamos colores específicos: Alto=Verde, Medio=Amarillo, Bajo=Rojo
+        color_discrete_map={
+            "Alto (>40%)": "green", 
+            "Medio": "#ffcc00", # Amarillo oro
+            "Bajo (<15%)": "red"
+        },
         hover_name='Desc',
-        title="Costo vs Precio"
+        title="Distribución de Precios (Color = Rentabilidad)"
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
 
-# --- TABLA FINAL ---
+# --- TABLA DETALLADA ---
 st.markdown("---")
+st.subheader("📋 Listado de Productos")
+
 st.dataframe(
-    df_filtrado[['Rubro', 'Desc', 'Costo', 'Precio', 'Margen_%', 'Ganancia_$']].style.format({
+    df_filtrado[['Desc', 'Costo', 'Precio', 'Ganancia_$', 'Margen_%']].style.format({
         "Precio": "${:,.0f}",
         "Costo": "${:,.0f}",
         "Ganancia_$": "${:,.0f}",
